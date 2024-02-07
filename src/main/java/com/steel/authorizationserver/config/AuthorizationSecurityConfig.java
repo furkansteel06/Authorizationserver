@@ -5,28 +5,28 @@ import com.nimbusds.jose.jwk.RSAKey;
 import com.nimbusds.jose.jwk.source.ImmutableJWKSet;
 import com.nimbusds.jose.jwk.source.JWKSource;
 import com.nimbusds.jose.proc.SecurityContext;
+import com.steel.authorizationserver.federated.FederatedIdentityConfigurer;
+import com.steel.authorizationserver.federated.UserRepositoryOAuth2UserHandler;
 import com.steel.authorizationserver.service.ClientService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.core.annotation.Order;
-import org.springframework.http.MediaType;
 import org.springframework.security.config.Customizer;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.core.GrantedAuthority;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.security.oauth2.jwt.JwtDecoder;
+import org.springframework.security.oauth2.server.authorization.*;
 import org.springframework.security.oauth2.server.authorization.config.annotation.web.configuration.OAuth2AuthorizationServerConfiguration;
 import org.springframework.security.oauth2.server.authorization.config.annotation.web.configurers.OAuth2AuthorizationServerConfigurer;
 import org.springframework.security.oauth2.server.authorization.settings.AuthorizationServerSettings;
 import org.springframework.security.oauth2.server.authorization.token.JwtEncodingContext;
 import org.springframework.security.oauth2.server.authorization.token.OAuth2TokenCustomizer;
 import org.springframework.security.web.SecurityFilterChain;
-import org.springframework.security.web.authentication.LoginUrlAuthenticationEntryPoint;
 import org.springframework.security.web.util.matcher.AntPathRequestMatcher;
-import org.springframework.security.web.util.matcher.MediaTypeRequestMatcher;
 
 import java.security.KeyPair;
 import java.security.KeyPairGenerator;
@@ -48,26 +48,31 @@ public class AuthorizationSecurityConfig {
     public SecurityFilterChain authSecurityFilterChain(HttpSecurity httpSecurity) throws Exception {
         OAuth2AuthorizationServerConfiguration.applyDefaultSecurity(httpSecurity);
         httpSecurity.getConfigurer(OAuth2AuthorizationServerConfigurer.class)
-                .oidc(Customizer.withDefaults());
-        httpSecurity.exceptionHandling(exception -> exception.defaultAuthenticationEntryPointFor(
-                new LoginUrlAuthenticationEntryPoint("/login"),
-                new MediaTypeRequestMatcher(MediaType.TEXT_HTML)
-        )).oauth2ResourceServer(resourceServer -> resourceServer.jwt(Customizer.withDefaults()));
+                .oidc(Customizer.withDefaults());	// Enable OpenID Connect 1.0
+        httpSecurity.oauth2ResourceServer(resourceServer -> resourceServer.jwt(Customizer.withDefaults()));
+        httpSecurity.with(new FederatedIdentityConfigurer(), Customizer.withDefaults());
         return httpSecurity.build();
     }
 
     @Bean
     @Order(2)
     public SecurityFilterChain webSecurityFilterChain(HttpSecurity httpSecurity) throws Exception {
-
-        httpSecurity.authorizeHttpRequests(auth -> auth.requestMatchers("/auth/**", "/client/**").permitAll().anyRequest().authenticated())
+        FederatedIdentityConfigurer federatedIdentityConfigurer = new FederatedIdentityConfigurer()
+                .oauth2UserHandler(new UserRepositoryOAuth2UserHandler());
+        httpSecurity
+                .authorizeRequests(authorizeRequests ->
+                        authorizeRequests
+                                .requestMatchers("/auth/**", "/client/**", "/login").permitAll()
+                                .anyRequest().authenticated()
+                )
                 .formLogin(Customizer.withDefaults())
                 .csrf(csrf -> csrf
                         .ignoringRequestMatchers(
                                 new AntPathRequestMatcher("/auth/**"),
                                 new AntPathRequestMatcher("/client/**")
                         )
-                );
+                )
+                .with(federatedIdentityConfigurer, Customizer.withDefaults());
         return httpSecurity.build();
     }
 
@@ -122,12 +127,22 @@ public class AuthorizationSecurityConfig {
 
     @Bean
     public AuthorizationServerSettings authorizationServerSettings() {
-        return AuthorizationServerSettings.builder().issuer("http://127.0.0.1:9000").build();
+        return AuthorizationServerSettings.builder().issuer("http://localhost:9000").build();
     }
 
     @Bean
     public JwtDecoder jwtDecoder(JWKSource<SecurityContext> jwkSource) {
         return OAuth2AuthorizationServerConfiguration.jwtDecoder(jwkSource);
+    }
+
+    @Bean
+    public OAuth2AuthorizationService authorizationService() {
+        return new InMemoryOAuth2AuthorizationService();
+    }
+
+    @Bean
+    public OAuth2AuthorizationConsentService authorizationConsentService() {
+        return new InMemoryOAuth2AuthorizationConsentService();
     }
 
     @Bean
